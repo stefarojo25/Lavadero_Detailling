@@ -1,0 +1,66 @@
+﻿@import "tailwindcss";
+
+:root {
+  font-family: Inter, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+  --color-dark-background: #05070A;
+  --color-dark-surface: #0D1117;
+  --color-dark-surface-secondary: #151B23;
+  --color-electric-blue: #008CFF;
+  --color-blue-hover: #0074D9;
+  --color-dark-text: #F8FAFC;
+  --color-dark-text-secondary: #94A3B8;
+  --color-dark-border: #1E293B;
+  --color-light-background: #F8FAFC;
+  --color-light-surface: #FFFFFF;
+  --color-light-surface-secondary: #F1F5F9;
+  --color-light-text: #0F172A;
+  --color-light-text-secondary: #64748B;
+  --color-light-border: #E2E8F0;
+  --app-background: var(--color-dark-background);
+  --app-surface: var(--color-dark-surface);
+  --app-surface-secondary: var(--color-dark-surface-secondary);
+  --app-text: var(--color-dark-text);
+  --app-text-secondary: var(--color-dark-text-secondary);
+  --app-border: var(--color-dark-border);
+  --app-accent: var(--color-electric-blue);
+  --app-accent-hover: var(--color-blue-hover);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --app-background: var(--color-light-background);
+  --app-surface: var(--color-light-surface);
+  --app-surface-secondary: var(--color-light-surface-secondary);
+  --app-text: var(--color-light-text);
+  --app-text-secondary: var(--color-light-text-secondary);
+  --app-border: var(--color-light-border);
+}
+
+@theme inline {
+  --color-canvas: var(--app-background);
+  --color-surface: var(--app-surface);
+  --color-surface-secondary: var(--app-surface-secondary);
+  --color-foreground: var(--app-text);
+  --color-muted: var(--app-text-secondary);
+  --color-outline: var(--app-border);
+  --color-brand: var(--app-accent);
+  --color-brand-hover: var(--app-accent-hover);
+  --font-sans: Inter, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; min-height: 100%; background: var(--app-background); }
+body { min-width: 320px; min-height: 100vh; margin: 0; background: var(--app-background); color: var(--app-text); font-size: 1rem; line-height: 1.5; }
+button, input, textarea, select { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 3px; }
+#root { min-height: 100vh; }
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: clamp(1.75rem, 5vw, 2.25rem); line-height: 1.2; font-weight: 650; letter-spacing: -0.035em; }
+h2 { font-size: 1.25rem; line-height: 1.3; font-weight: 600; letter-spacing: -0.02em; }

@@ -1,0 +1,1 @@
+﻿-- Semillas de datos: pendientes de definir junto con el modelo de datos.
