@@ -3,6 +3,9 @@ import AuthLayout from '../layouts/AuthLayout.jsx'
 import DashboardLayout from '../layouts/DashboardLayout.jsx'
 import PublicLayout from '../layouts/PublicLayout.jsx'
 import { useAuth } from '../features/auth/useAuth.js'
+import { useEffect } from 'react'
+import { resolveActivePrincipal } from '../features/auth/accessControl.js'
+import { useBusinessData } from '../hooks/useBusinessData.js'
 import AgendaPage from '../pages/Agenda/index.jsx'
 import CashPage from '../pages/Cash/index.jsx'
 import ClientsPage from '../pages/Clients/index.jsx'
@@ -18,15 +21,21 @@ import SettingsPage from '../pages/Settings/index.jsx'
 import { ROUTES } from './routes.js'
 
 function AppRouter() {
-  const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
+  const { user, logout } = useAuth()
+  const { data } = useBusinessData()
+  const principal = resolveActivePrincipal(data, user)
+  const isAdmin = principal?.role === 'admin'
+
+  useEffect(() => {
+    if (user && !principal) logout()
+  }, [user, principal, logout])
 
   return (
     <Routes>
-      <Route path={ROUTES.LOGIN} element={user ? <Navigate to={ROUTES.DASHBOARD} replace /> : <AuthLayout />}>
+      <Route path={ROUTES.LOGIN} element={principal ? <Navigate to={ROUTES.DASHBOARD} replace /> : <AuthLayout />}>
         <Route index element={<LoginPage />} />
       </Route>
-      <Route element={user ? <DashboardLayout /> : <Navigate to={ROUTES.LOGIN} replace />}>
+      <Route element={principal ? <DashboardLayout /> : <Navigate to={ROUTES.LOGIN} replace />}>
         <Route path="/" element={<Navigate to={ROUTES.DASHBOARD} replace />} />
         <Route path={ROUTES.DASHBOARD} element={<DashboardPage />} />
         <Route path={ROUTES.AGENDA} element={<AgendaPage />} />

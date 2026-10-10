@@ -16,10 +16,11 @@ function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [notice, setNotice] = useState('')
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
+    setNotice('')
     try {
-      login({ email: email.trim(), password, remember })
+      await login({ email: email.trim(), password, remember })
       navigate(ROUTES.DASHBOARD, { replace: true })
     } catch (error) {
       setNotice(error.message)

@@ -9,12 +9,14 @@ import TextField from '../../components/ui/TextField.jsx'
 import { useAuth } from '../../features/auth/useAuth.js'
 import { useBusinessData } from '../../hooks/useBusinessData.js'
 import { formatDate, fullName, vehicleName } from '../../lib/formatters.js'
+import { matchesClientSearch } from '../../lib/search.js'
+import PhotoGallery from '../../components/photos/PhotoGallery.jsx'
 
 const EMPTY_CLIENT = { fullName: '', phone: '', address: '', whatsapp: '', observations: '', active: true }
 const EMPTY_VEHICLE = { plate: '', type: 'Carro', brand: '', model: '', color: '', observations: '', active: true }
 
 function ClientsPage() {
-  const { data, createClient, updateClient, createVehicle, updateVehicle } = useBusinessData()
+  const { data, createClient, updateClient, createVehicle, updateVehicle, uploadPhoto, listPhotos, readPhotoFile, deletePhoto } = useBusinessData()
   const { user } = useAuth()
   const canCreateClient = user?.role === 'admin' || user?.role === 'employee'
   const canCreateVehicle = user?.role === 'admin' || user?.role === 'employee'
@@ -29,8 +31,7 @@ function ClientsPage() {
   const [feedback, setFeedback] = useState(null)
 
   const filteredClients = data.clients.filter((client) => {
-    const searchText = `${fullName(client)} ${client.phone} ${client.address}`.toLowerCase()
-    return searchText.includes(query.trim().toLowerCase()) && (statusFilter === 'all' || client.active === (statusFilter === 'active'))
+    return matchesClientSearch(client, query) && (statusFilter === 'all' || client.active === (statusFilter === 'active'))
   })
 
   function openForm(client = null) {
@@ -49,10 +50,8 @@ function ClientsPage() {
         updateClient(dialog.clientId, values)
         setFeedback({ type: 'success', message: 'Cliente actualizado.' })
       } else {
-        const nextData = createClient(values, vehicleDrafts)
-        const createdClient = nextData.clients[0]
-        const codes = nextData.vehicles.filter((vehicle) => vehicle.clientId === createdClient?.id).map((vehicle) => vehicle.consultationCode)
-        setFeedback({ type: 'success', message: codes.length ? `Cliente registrado. Códigos de consulta: ${codes.join(', ')}` : 'Cliente registrado.' })
+        createClient(values, vehicleDrafts)
+        setFeedback({ type: 'success', message: vehicleDrafts.length ? 'Cliente y vehículos registrados. El código se generará al crear una orden.' : 'Cliente registrado.' })
       }
       setDialog(null)
     } catch (error) {
@@ -87,15 +86,21 @@ function ClientsPage() {
     event.preventDefault()
     try {
       const values = { ...vehicleForm, clientId: detailClient.id }
-      let nextData
-      if (vehicleDialog.vehicleId) nextData = updateVehicle(vehicleDialog.vehicleId, values)
-      else nextData = createVehicle(values)
-      const savedVehicle = nextData.vehicles.find((vehicle) => vehicle.id === (vehicleDialog.vehicleId ?? nextData.vehicles[0]?.id))
+      if (vehicleDialog.vehicleId) updateVehicle(vehicleDialog.vehicleId, values)
+      else createVehicle(values)
       setVehicleDialog(null)
-      setFeedback({ type: 'success', message: vehicleDialog.vehicleId ? 'Vehículo actualizado.' : `Vehículo asociado. Código de consulta: ${savedVehicle?.consultationCode}` })
+      setFeedback({ type: 'success', message: vehicleDialog.vehicleId ? 'Vehículo actualizado.' : 'Vehículo asociado. El código se generará al crear una orden.' })
     } catch (error) {
       setFeedback({ type: 'error', message: error.message })
     }
+  }
+
+  async function saveVehiclePhoto(vehicle, file) {
+    await uploadPhoto(file, { vehicleId: vehicle.id, stage: 'general' })
+  }
+
+  async function removeVehiclePhoto(photoId) {
+    await deletePhoto(photoId)
   }
 
   const detailClient = dialog?.type === 'detail' ? data.clients.find((client) => client.id === dialog.clientId) : null
@@ -154,7 +159,7 @@ function ClientsPage() {
       {detailClient && <Modal title={fullName(detailClient)} description={`Cliente desde ${formatDate(detailClient.createdAt)}`} onClose={() => setDialog(null)} wide>
         <div className="grid gap-6 sm:grid-cols-2">
           <section><h3 className="text-sm font-semibold text-foreground">Información de contacto</h3><dl className="mt-3 space-y-2 text-sm"><div className="flex justify-between gap-3"><dt className="text-muted">Teléfono</dt><dd className="text-right text-foreground">{detailClient.phone}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">WhatsApp</dt><dd className="text-right text-foreground">{detailClient.whatsapp || 'Sin número'}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">Dirección</dt><dd className="text-right text-foreground">{detailClient.address || 'Sin dirección'}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">Observaciones</dt><dd className="max-w-[55%] text-right text-foreground">{detailClient.observations || 'Sin observaciones'}</dd></div></dl></section>
-          <section><div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold text-foreground">Vehículos ({data.vehicles.filter((item) => item.clientId === detailClient.id).length})</h3>{canCreateVehicle && <Button type="button" variant="secondary" onClick={() => openVehicleForm()}><Plus size={14} />Agregar</Button>}</div><ul className="mt-3 space-y-2">{data.vehicles.filter((item) => item.clientId === detailClient.id).map((vehicle) => <li key={vehicle.id} className="flex items-center justify-between gap-2 rounded-lg border border-outline bg-canvas px-3 py-2 text-sm text-foreground"><div className="min-w-0">{vehicleName(vehicle)}<span className="mt-0.5 block text-xs text-muted">{vehicle.type} · {vehicle.color} · {vehicle.active ? 'Activo' : 'Inactivo'}</span><span className="mt-1 block font-mono text-xs text-brand">Código: {vehicle.consultationCode}</span>{vehicle.observations && <span className="mt-1 block text-xs text-muted">{vehicle.observations}</span>}</div>{canAdministerClients && <Button type="button" variant="secondary" onClick={() => openVehicleForm(vehicle)} aria-label={`Editar ${vehicle.plate}`} title="Editar vehículo"><Pencil size={15} /></Button>}</li>)}{!data.vehicles.some((item) => item.clientId === detailClient.id) && <li className="text-sm text-muted">Sin vehículos asociados.</li>}</ul></section>
+          <section><div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold text-foreground">Vehículos ({data.vehicles.filter((item) => item.clientId === detailClient.id).length})</h3>{canCreateVehicle && <Button type="button" variant="secondary" onClick={() => openVehicleForm()}><Plus size={14} />Agregar</Button>}</div><ul className="mt-3 space-y-3">{data.vehicles.filter((item) => item.clientId === detailClient.id).map((vehicle) => <li key={vehicle.id} className="rounded-lg border border-outline bg-canvas p-3 text-sm text-foreground"><div className="flex items-start justify-between gap-2"><div className="min-w-0">{vehicleName(vehicle)}<span className="mt-0.5 block text-xs text-muted">{vehicle.type} · {vehicle.color} · {vehicle.active ? 'Activo' : 'Inactivo'}</span>{vehicle.observations && <span className="mt-1 block text-xs text-muted">{vehicle.observations}</span>}</div>{canAdministerClients && <Button type="button" variant="secondary" onClick={() => openVehicleForm(vehicle)} aria-label={`Editar ${vehicle.plate}`} title="Editar vehículo"><Pencil size={15} /></Button>}</div>{canAdministerClients && <div className="mt-3"><PhotoGallery label="Fotos generales del vehículo" photos={listPhotos({ vehicleId: vehicle.id })} readFile={readPhotoFile} onSave={(file) => saveVehiclePhoto(vehicle, file)} onDelete={removeVehiclePhoto} canUpload={canAdministerClients} canDelete={canAdministerClients} /></div>}</li>)}{!data.vehicles.some((item) => item.clientId === detailClient.id) && <li className="text-sm text-muted">Sin vehículos asociados.</li>}</ul></section>
           <section className="sm:col-span-2"><h3 className="text-sm font-semibold text-foreground">Historial de órdenes</h3><ul className="mt-3 space-y-2">{data.orders.filter((item) => item.clientId === detailClient.id).map((order) => { const service = data.services.find((item) => item.id === order.serviceId); return <li key={order.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-outline bg-canvas px-3 py-2 text-sm"><span className="text-foreground">{order.number} · {service?.name}</span><span className="text-muted">{formatDate(order.createdAt)} · {order.status}</span></li> })}{!data.orders.some((item) => item.clientId === detailClient.id) && <li className="text-sm text-muted">Sin órdenes registradas.</li>}</ul></section>
         </div>
       </Modal>}

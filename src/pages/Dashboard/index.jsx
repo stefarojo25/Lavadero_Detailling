@@ -23,7 +23,7 @@ function DashboardPage() {
   const visibleReferences = new Set([...visibleOrders.map((order) => order.id), ...visibleAppointments.map((appointment) => appointment.id)])
   const activity = isEmployee ? data.activity.filter((item) => visibleReferences.has(item.referenceId)) : data.activity
   const activeOrders = visibleOrders.filter((order) => ['PENDING', 'IN_PROGRESS'].includes(order.status))
-  const todayLabel = new Intl.DateTimeFormat('es-CO', { dateStyle: 'full' }).format(new Date())
+  const todayLabel = new Intl.DateTimeFormat('es-CO', { dateStyle: 'full', timeZone: 'America/Bogota' }).format(new Date())
 
   return (
     <div className="dashboard-atmosphere">

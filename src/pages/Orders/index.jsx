@@ -9,14 +9,17 @@ import TextField from '../../components/ui/TextField.jsx'
 import { useAuth } from '../../features/auth/useAuth.js'
 import { ROUTES } from '../../app/routes.js'
 import { useBusinessData } from '../../hooks/useBusinessData.js'
-import { formatCurrency, formatDateTime, fullName, vehicleName } from '../../lib/formatters.js'
-import { normalizeSearchText, searchRank } from '../../lib/search.js'
+import { commercialDateInput, formatCurrency, formatDateTime, fullName, vehicleName } from '../../lib/formatters.js'
+import { normalizePlate, normalizeSearchText, searchRank } from '../../lib/search.js'
+import { createConsultationWhatsAppUrl } from '../../lib/vehicleConsultation.js'
+import PhotoGallery from '../../components/photos/PhotoGallery.jsx'
+import { validatePhotoFile } from '../../services/photoStorage.js'
 
-const EMPTY_ORDER = { clientId: '', vehicleId: '', serviceId: '', employeeId: '', date: new Date().toISOString().slice(0, 10), paymentMethod: '', price: '', initialConditionNotes: '', initialConditionPhotos: [] }
+const EMPTY_ORDER = { clientId: '', vehicleId: '', serviceId: '', employeeId: '', date: commercialDateInput(), paymentMethod: '', price: '', initialConditionNotes: '', initialConditionPhotos: [] }
 
 function OrdersPage() {
   const location = useLocation()
-  const { data, createOrder, updateOrder, deleteOrder, transitionOrder, declarePaymentMethod, confirmPayment } = useBusinessData()
+  const { data, createOrder, updateOrder, deleteOrder, transitionOrder, declarePaymentMethod, confirmPayment, uploadPhoto, listPhotos, readPhotoFile, deletePhoto } = useBusinessData()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
   const isEmployee = user?.role === 'employee'
@@ -27,6 +30,7 @@ function OrdersPage() {
   const [plateSearch, setPlateSearch] = useState('')
   const [form, setForm] = useState(EMPTY_ORDER)
   const [createOpen, setCreateOpen] = useState(false)
+  const [createdOrderId, setCreatedOrderId] = useState(null)
   const [editOrder, setEditOrder] = useState(null)
   const [deleteOrderId, setDeleteOrderId] = useState(null)
   const [paymentOrderId, setPaymentOrderId] = useState(null)
@@ -34,17 +38,27 @@ function OrdersPage() {
   const [feedback, setFeedback] = useState(null)
   const temporaryPhotoUrls = useRef(new Set())
   const visibleOrders = data.orders.filter((order) => isAdmin || (user?.employeeId && order.employeeId === user.employeeId))
+  const createdOrder = data.orders.find((order) => order.id === createdOrderId)
+  const createdClient = createdOrder ? data.clients.find((client) => client.id === createdOrder.clientId) : null
+  const createdVehicle = createdOrder ? data.vehicles.find((vehicle) => vehicle.id === createdOrder.vehicleId) : null
+  const createdService = createdOrder ? data.services.find((service) => service.id === createdOrder.serviceId) : null
+  const publicConsultationUrl = typeof window === 'undefined' ? ROUTES.PUBLIC_VEHICLE : new URL(ROUTES.PUBLIC_VEHICLE, window.location.origin).toString()
+  const createdWhatsAppUrl = createdOrder ? createConsultationWhatsAppUrl({ whatsapp: createdClient?.whatsapp, consultationCode: createdOrder.consultationCode, publicUrl: publicConsultationUrl, businessName: data.business?.name, clientName: createdClient ? fullName(createdClient) : '', plate: createdVehicle?.plate, serviceName: createdService?.name }) : null
 
   const filteredOrders = data.orders.filter((order) => {
     if (!isAdmin && (!user?.employeeId || order.employeeId !== user.employeeId)) return false
     const relations = { client: data.clients.find((item) => item.id === order.clientId), vehicle: data.vehicles.find((item) => item.id === order.vehicleId), service: data.services.find((item) => item.id === order.serviceId) }
-    const text = `${order.number} ${fullName(relations.client)} ${vehicleName(relations.vehicle)} ${relations.service?.name ?? ''}`.toLowerCase()
-    return text.includes(query.trim().toLowerCase()) && (statusFilter === 'all' || order.status === statusFilter)
+    const normalizedQuery = normalizeSearchText(query)
+    const normalizedPlateQuery = normalizePlate(query)
+    const text = normalizeSearchText(`${order.number} ${fullName(relations.client)} ${relations.service?.name ?? ''}`)
+    const matchesSearch = !normalizedQuery || text.includes(normalizedQuery) || (normalizedPlateQuery && normalizePlate(relations.vehicle?.plate).includes(normalizedPlateQuery))
+    return matchesSearch && (statusFilter === 'all' || order.status === statusFilter)
   })
 
   function openCreate() {
     const selectedService = data.services.find((service) => service.id === location.state?.serviceId && service.active)
     setForm({ ...EMPTY_ORDER, ...(selectedService ? { serviceId: selectedService.id, price: String(selectedService.price) } : {}) })
+    setCreatedOrderId(null)
     setClientSearch('')
     setPlateSearch('')
     setCreateOpen(true)
@@ -64,17 +78,15 @@ function OrdersPage() {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
-    if (!file.type.startsWith('image/')) {
-      setFeedback({ type: 'error', message: 'Selecciona una imagen válida.' })
-      return
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setFeedback({ type: 'error', message: 'Cada fotografía debe pesar menos de 5 MB.' })
+    try {
+      validatePhotoFile(file)
+    } catch (error) {
+      setFeedback({ type: 'error', message: error.message })
       return
     }
     const previewUrl = URL.createObjectURL(file)
     temporaryPhotoUrls.current.add(previewUrl)
-    setForm((current) => ({ ...current, initialConditionPhotos: [...current.initialConditionPhotos, { id: crypto.randomUUID(), fileName: file.name, url: previewUrl, capturedAt: new Date().toISOString(), description: '', position: '' }] }))
+    setForm((current) => ({ ...current, initialConditionPhotos: [...current.initialConditionPhotos, { id: crypto.randomUUID(), file, fileName: file.name, url: previewUrl, description: '', position: '' }] }))
     setFeedback(null)
   }
 
@@ -97,14 +109,26 @@ function OrdersPage() {
     setCreateOpen(false)
   }
 
-  function handleCreate(event) {
+  async function handleCreate(event) {
     event.preventDefault()
     try {
-      const savedPhotos = form.initialConditionPhotos.map((photo) => ({ id: photo.id, url: null, fileName: photo.fileName, capturedAt: photo.capturedAt, description: photo.description.trim(), position: photo.position.trim() }))
-      const orderValues = { ...form, employeeId: isAdmin ? form.employeeId : user.employeeId, paymentMethod: form.paymentMethod, initialConditionPhotos: savedPhotos }
-      createOrder(orderValues)
-      setCreateOpen(false)
-      setFeedback({ type: 'success', message: 'Orden creada en estado Pendiente. El pago queda pendiente de confirmación.' })
+      const photoDrafts = [...form.initialConditionPhotos]
+      const orderValues = { ...form, employeeId: isAdmin ? form.employeeId : user.employeeId, paymentMethod: form.paymentMethod, initialConditionPhotos: [] }
+      const nextData = createOrder(orderValues)
+      const created = nextData.orders[0]
+      setCreatedOrderId(created?.id ?? null)
+      closeCreate()
+      const failures = []
+      for (const photo of photoDrafts) {
+        try {
+          await uploadPhoto(photo.file, { vehicleId: created.vehicleId, orderId: created.id, stage: 'before', description: photo.description, position: photo.position })
+        } catch (error) {
+          failures.push(`${photo.fileName}: ${error.message}`)
+        }
+      }
+      setFeedback(failures.length
+        ? { type: 'error', message: `La orden se creó, pero no se guardaron ${failures.length} fotografía(s). ${failures.join(' ')}` }
+        : { type: 'success', message: `Orden creada en estado Pendiente${photoDrafts.length ? ` con ${photoDrafts.length} fotografía(s) inicial(es) guardada(s)` : ''}. El pago queda pendiente de confirmación.` })
     } catch (error) {
       setFeedback({ type: 'error', message: error.message })
     }
@@ -171,7 +195,7 @@ function OrdersPage() {
 
   const availableVehicles = data.vehicles.filter((vehicle) => vehicle.clientId === form.clientId && vehicle.active)
   const normalizedClientSearch = normalizeSearchText(clientSearch)
-  const normalizedPlateSearch = normalizeSearchText(plateSearch)
+  const normalizedPlateSearch = normalizePlate(plateSearch)
   const clientSearchResults = normalizedClientSearch
     ? data.clients
       .filter((client) => client.active)
@@ -194,8 +218,8 @@ function OrdersPage() {
   const plateSearchResults = normalizedPlateSearch
     ? data.vehicles
       .filter((vehicle) => vehicle.active)
-      .map((vehicle) => ({ vehicle, rank: searchRank(normalizeSearchText(vehicle.plate), normalizedPlateSearch) }))
-      .filter(({ vehicle }) => normalizeSearchText(vehicle.plate).includes(normalizedPlateSearch))
+      .map((vehicle) => ({ vehicle, rank: searchRank(normalizePlate(vehicle.plate), normalizedPlateSearch) }))
+      .filter(({ vehicle }) => normalizePlate(vehicle.plate).includes(normalizedPlateSearch))
       .sort((first, second) => first.rank - second.rank)
       .map(({ vehicle }) => vehicle)
     : []
@@ -222,6 +246,7 @@ function OrdersPage() {
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="text-sm text-muted">{isAdmin ? 'Seguimiento de todas las órdenes' : 'Tareas que te fueron asignadas'}</p><h2 className="mt-1 text-2xl font-semibold text-foreground">{isAdmin ? 'Órdenes de servicio' : 'Mis órdenes'}</h2><p className="mt-2 text-sm text-muted">La finalización descuenta receta; Caja solo recibe pagos confirmados por Admin.</p></div>{(isAdmin || isEmployee) && <Button type="button" onClick={openCreate}><Plus size={17} />Crear orden</Button>}</div>
       <div className="grid gap-3 grid-cols-2 xl:grid-cols-4"><div className="rounded-xl border border-outline bg-surface p-4"><p className="text-xs text-muted">Pendientes</p><p className="mt-2 text-2xl font-semibold text-amber-200">{visibleOrders.filter((item) => item.status === 'PENDING').length}</p></div><div className="rounded-xl border border-outline bg-surface p-4"><p className="text-xs text-muted">En proceso</p><p className="mt-2 text-2xl font-semibold text-sky-200">{visibleOrders.filter((item) => item.status === 'IN_PROGRESS').length}</p></div><div className="rounded-xl border border-outline bg-surface p-4"><p className="text-xs text-muted">Completadas</p><p className="mt-2 text-2xl font-semibold text-emerald-200">{visibleOrders.filter((item) => item.status === 'COMPLETED').length}</p></div><div className="rounded-xl border border-outline bg-surface p-4"><p className="text-xs text-muted">Canceladas</p><p className="mt-2 text-2xl font-semibold text-muted">{visibleOrders.filter((item) => item.status === 'CANCELLED').length}</p></div></div>
       {feedback && <p role="status" className={`rounded-lg border px-4 py-3 text-sm ${feedback.type === 'error' ? 'border-red-400/30 bg-red-400/10 text-red-200' : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'}`}>{feedback.message}</p>}
+      {createdOrder && <section className="flex flex-col gap-4 rounded-xl border border-brand/25 bg-brand/5 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-foreground">Consulta pública · {createdOrder.number}</p><p className="mt-1 text-sm text-muted">Código de consulta: <span className="font-mono font-semibold tracking-wider text-foreground">{createdOrder.consultationCode}</span></p><p className="mt-1 break-all text-xs text-muted">Enlace: <a href={publicConsultationUrl} target="_blank" rel="noreferrer" className="text-brand underline">{publicConsultationUrl}</a></p>{!createdClient?.whatsapp?.trim() && <p className="mt-2 text-sm text-amber-200">No fue posible preparar WhatsApp: el cliente no tiene un número de WhatsApp registrado.</p>}{createdClient?.whatsapp?.trim() && !createdWhatsAppUrl && <p className="mt-2 text-sm text-amber-200">No fue posible preparar WhatsApp: el número registrado no tiene un formato utilizable.</p>}</div>{createdWhatsAppUrl && <a href={createdWhatsAppUrl} target="_blank" rel="noreferrer" onClick={() => setFeedback({ type: 'success', message: 'WhatsApp preparado con el mensaje. No se ha enviado automáticamente; confirma el envío desde WhatsApp.' })} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white shadow-[0_8px_24px_rgba(0,140,255,0.2)] transition-colors hover:bg-brand-hover">Enviar código por WhatsApp</a>}</section>}
       <section className="overflow-hidden rounded-xl border border-outline bg-surface">
         <div className="flex flex-col gap-3 border-b border-outline p-4 sm:flex-row sm:items-center sm:justify-between"><div className="relative w-full sm:max-w-sm"><Search size={17} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar orden, cliente o placa" aria-label="Buscar órdenes" className="h-10 w-full rounded-lg border border-outline bg-canvas pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-muted focus:border-brand" /></div><div className="w-full sm:w-48"><SelectField id="order-filter" label="Estado" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">Todos los estados</option><option value="PENDING">Pendientes</option><option value="IN_PROGRESS">En proceso</option><option value="COMPLETED">Completadas</option><option value="CANCELLED">Canceladas</option></SelectField></div></div>
         {filteredOrders.length === 0 ? <p className="px-5 py-14 text-center text-sm text-muted">{query || statusFilter !== 'all' ? 'No hay órdenes que coincidan con el filtro.' : 'Todavía no hay órdenes registradas.'}</p> : <ul className="grid gap-3 p-4 xl:grid-cols-2">{filteredOrders.map((order) => {
@@ -230,12 +255,15 @@ function OrdersPage() {
           const service = data.services.find((item) => item.id === order.serviceId)
           const employee = data.employees.find((item) => item.id === order.employeeId)
           const payment = data.payments.find((item) => item.id === order.paymentId)
+          const orderPhotos = listPhotos({ orderId: order.id })
+          const canManageOrderPhotos = isAdmin || (isEmployee && order.employeeId === user.employeeId)
           return <li key={order.id} className="min-w-0 rounded-lg border border-outline bg-canvas p-4">
             <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-mono text-sm font-semibold text-foreground">{order.number}</p><StatusBadge status={order.status} /></div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="flex min-w-0 gap-2.5"><UserRound size={16} className="mt-0.5 shrink-0 text-muted" /><p className="truncate text-sm text-foreground">{fullName(client)}</p></div><div className="flex min-w-0 gap-2.5"><CarFront size={16} className="mt-0.5 shrink-0 text-muted" /><p className="truncate text-sm text-foreground">{vehicleName(vehicle)}</p></div><div className="flex min-w-0 gap-2.5"><Wrench size={16} className="mt-0.5 shrink-0 text-muted" /><p className="truncate text-sm text-foreground">{service?.name ?? 'Servicio no disponible'}</p></div><div className="flex min-w-0 gap-2.5"><UserRound size={16} className="mt-0.5 shrink-0 text-muted" /><p className="truncate text-sm text-foreground">{employee?.name ?? 'Empleado no asignado'}</p></div></div>
-            <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-outline pt-3"><div><p className="text-lg font-semibold text-foreground">{formatCurrency(order.price)}</p><p className="mt-1 flex items-center gap-1 text-xs text-muted"><Clock3 size={13} />{formatDateTime(order.createdAt)}</p>{order.initialConditionNotes && <p className="mt-2 max-w-2xl text-xs text-muted">Estado inicial: {order.initialConditionNotes}</p>}{order.initialConditionPhotos.length > 0 && <p className="mt-1 text-xs text-muted">Fotografías iniciales: {order.initialConditionPhotos.length}</p>}<p className="mt-1 text-xs text-muted">{payment ? `Pagado · ${payment.method === 'cash' ? 'Efectivo' : 'Transferencia'}` : order.paymentStatus === 'PENDING_CONFIRMATION' ? `Pendiente de confirmación · ${order.paymentMethod === 'cash' ? 'Efectivo' : 'Transferencia'}` : order.paymentStatus === 'AWAITING_METHOD' ? 'Pendiente de método indicado' : 'Sin pago declarado'}</p>{order.status === 'COMPLETED' && order.inventoryConsumedAt && <p className="mt-1 text-xs text-emerald-300">Insumos descontados automáticamente</p>}</div>
-              <div className="flex flex-wrap justify-end gap-2">{order.status === 'PENDING' && <><Button type="button" onClick={() => changeStatus(order, 'IN_PROGRESS')}><ArrowRight size={15} />Iniciar</Button><Button type="button" variant="secondary" onClick={() => changeStatus(order, 'CANCELLED')}><CircleX size={15} />Cancelar</Button></>}{order.status === 'IN_PROGRESS' && <><Button type="button" onClick={() => changeStatus(order, 'COMPLETED')}><Check size={15} />Completar</Button><Button type="button" variant="secondary" onClick={() => changeStatus(order, 'CANCELLED')}><CircleX size={15} />Cancelar</Button></>}{order.status === 'COMPLETED' && order.paymentStatus === 'AWAITING_METHOD' && !isAdmin && <Button type="button" onClick={() => setPaymentOrderId(order.id)}>Indicar método de pago</Button>}{order.status === 'COMPLETED' && order.paymentStatus === 'PENDING_CONFIRMATION' && isAdmin && <Button type="button" onClick={() => handlePaymentConfirmation(order)}><CircleCheck size={15} />Confirmar pago</Button>}{isAdmin && order.status !== 'CANCELLED' && <><Button type="button" variant="secondary" onClick={() => openEdit(order)}><Pencil size={15} />Corregir</Button>{(!order.paymentId && order.paymentStatus !== 'CONFIRMED' && order.status !== 'COMPLETED') && <Button type="button" variant="secondary" onClick={() => setDeleteOrderId(order.id)}><Trash2 size={15} />Eliminar</Button>}</>}</div>
+            <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-outline pt-3"><div><p className="text-lg font-semibold text-foreground">{formatCurrency(order.price)}</p><p className="mt-1 flex items-center gap-1 text-xs text-muted"><Clock3 size={13} />{formatDateTime(order.createdAt)}</p>{order.initialConditionNotes && <p className="mt-2 max-w-2xl text-xs text-muted">Estado inicial: {order.initialConditionNotes}</p>}{orderPhotos.some((photo) => photo.stage === 'before') && <p className="mt-1 text-xs text-muted">Fotografías iniciales: {orderPhotos.filter((photo) => photo.stage === 'before').length}</p>}<p className="mt-1 text-xs text-muted">{payment ? `Pagado · ${payment.method === 'cash' ? 'Efectivo' : 'Transferencia'}` : order.paymentStatus === 'PENDING_CONFIRMATION' ? `Pendiente de confirmación · ${order.paymentMethod === 'cash' ? 'Efectivo' : 'Transferencia'}` : order.paymentStatus === 'AWAITING_METHOD' ? 'Pendiente de método indicado' : 'Sin pago declarado'}</p>{order.status === 'COMPLETED' && order.inventoryConsumedAt && <p className="mt-1 text-xs text-emerald-300">Insumos descontados automáticamente</p>}{isAdmin && order.inventoryConsumedAt !== null && order.inventoryConsumedAt !== undefined && <p className="mt-1 text-xs text-muted">No se puede eliminar: el servicio ya consumió inventario.</p>}</div>
+              <div className="flex flex-wrap justify-end gap-2">{order.status === 'PENDING' && <><Button type="button" onClick={() => changeStatus(order, 'IN_PROGRESS')}><ArrowRight size={15} />Iniciar</Button>{isAdmin && <Button type="button" variant="secondary" onClick={() => changeStatus(order, 'CANCELLED')}><CircleX size={15} />Cancelar</Button>}</>}{order.status === 'IN_PROGRESS' && <><Button type="button" onClick={() => changeStatus(order, 'COMPLETED')}><Check size={15} />Completar</Button>{isAdmin && <Button type="button" variant="secondary" onClick={() => changeStatus(order, 'CANCELLED')}><CircleX size={15} />Cancelar</Button>}</>}{order.status === 'COMPLETED' && order.paymentStatus === 'AWAITING_METHOD' && !isAdmin && <Button type="button" onClick={() => setPaymentOrderId(order.id)}>Indicar método de pago</Button>}{order.status === 'COMPLETED' && order.paymentStatus === 'PENDING_CONFIRMATION' && isAdmin && <Button type="button" onClick={() => handlePaymentConfirmation(order)}><CircleCheck size={15} />Confirmar pago</Button>}{isAdmin && <>{order.status !== 'CANCELLED' && <Button type="button" variant="secondary" onClick={() => openEdit(order)}><Pencil size={15} />Corregir</Button>}{!order.inventoryConsumedAt && !order.paymentId && order.paymentStatus !== 'CONFIRMED' && <Button type="button" variant="secondary" onClick={() => setDeleteOrderId(order.id)}><Trash2 size={15} />Eliminar</Button>}</>}</div>
             </div>
+            <div className="mt-4 grid gap-3 border-t border-outline pt-4 sm:grid-cols-3">{[['before', 'Antes'], ['during', 'Durante'], ['after', 'Después']].map(([stage, label]) => <PhotoGallery key={`${order.id}-${stage}`} label={label} photos={orderPhotos.filter((photo) => photo.stage === stage)} readFile={readPhotoFile} onSave={(file) => uploadPhoto(file, { vehicleId: order.vehicleId, orderId: order.id, stage })} onDelete={deletePhoto} canUpload={canManageOrderPhotos} canDelete={isAdmin} />)}</div>
           </li>
         })}</ul>}
       </section>
@@ -264,8 +292,8 @@ function OrdersPage() {
             <div className="sm:col-span-2"><TextField id="order-initial-condition-notes" label="Observaciones iniciales" value={form.initialConditionNotes} onChange={(event) => setForm((current) => ({ ...current, initialConditionNotes: event.target.value }))} maxLength={500} placeholder="Ejemplo: rayón en la puerta delantera derecha" /></div>
             <div>
               <label htmlFor="order-initial-condition-photo" className="mb-2 block text-sm font-medium text-foreground">Fotografías del estado inicial</label>
-              <label htmlFor="order-initial-condition-photo" className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border border-outline bg-surface px-3.5 text-sm font-medium text-foreground hover:border-brand/50"><ImagePlus size={16} />Agregar fotografía<input id="order-initial-condition-photo" type="file" accept="image/*" onChange={addInitialPhoto} className="sr-only" /></label>
-              <p className="mt-2 text-xs text-muted">Las imágenes se usan únicamente como previsualización durante el formulario. No se guardan en localStorage.</p>
+              <label htmlFor="order-initial-condition-photo" className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border border-outline bg-surface px-3.5 text-sm font-medium text-foreground hover:border-brand/50"><ImagePlus size={16} />Agregar fotografía<input id="order-initial-condition-photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={addInitialPhoto} className="sr-only" /></label>
+              <p className="mt-2 text-xs text-muted">La vista previa es temporal. Las fotos se guardan localmente al crear la orden, fuera de localStorage.</p>
             </div>
             {form.initialConditionPhotos.length > 0 && <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{form.initialConditionPhotos.map((photo, index) => <li key={photo.id} className="overflow-hidden rounded-lg border border-outline bg-surface"><div className="relative aspect-4/3 bg-surface-secondary"><img src={photo.url} alt={`Previsualización ${index + 1}`} className="h-full w-full object-cover" /><Button type="button" variant="secondary" onClick={() => removeInitialPhoto(index)} className="absolute right-2 top-2 grid size-8 place-items-center rounded-md p-0" aria-label={`Eliminar fotografía ${index + 1}`} title="Eliminar fotografía"><Trash2 size={15} /></Button></div><div className="space-y-2 p-3"><p className="truncate text-xs text-muted">{photo.fileName}</p><TextField id={`initial-photo-description-${index}`} label="Descripción" value={photo.description} onChange={(event) => updateInitialPhoto(index, 'description', event.target.value)} maxLength={200} /><TextField id={`initial-photo-position-${index}`} label="Ángulo o posición" value={photo.position} onChange={(event) => updateInitialPhoto(index, 'position', event.target.value)} maxLength={100} placeholder="Frente, lateral, trasero" /></div></li>)}</ul>}
           </section>
